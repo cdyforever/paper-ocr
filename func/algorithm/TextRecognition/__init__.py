@@ -1,0 +1,1 @@
+from .TextRecognizer import TextRecognizer
