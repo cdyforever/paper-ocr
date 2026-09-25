@@ -63,8 +63,8 @@ USE_FORMULA_RECOGNIZE_ONNX = True
 
 # -------------- PAGE-LEVEL DECOUPLED PIPELINE -------------- #
 # DBNet 是为「横向文本行」训练的, 公式 (分式/根式/上下标/积分号) 不是它的
-# 目标形态。实测: 公式区域平均只有 43.9% 的面积落在 DBNet 行框内,
-# 31 个公式里 17 个 (55%) 完全丢失; 行内 MFD 因此只能找到 6/31。
+# 目标形态。实测: 公式区域平均只有 44.8% 的面积落在 DBNet 行框内,
+# 30 个公式里 16 个 (53%) 完全丢失; 行内 MFD 因此只能找到 6/30。
 #
 # 因此把顺序反过来: 页面级 MFD 先检测公式 -> 涂白 -> DBNet 只切纯文本行。
 # 见 func/algorithm/onnx_page_pipeline.py

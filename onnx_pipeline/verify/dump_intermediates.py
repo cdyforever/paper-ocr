@@ -184,6 +184,8 @@ def main():
     print(f"  [保存] 05_det_boxes_final.jpg  {len(final_boxes)} 个框")
 
     # 6) 识别裁剪图
+    for old in (OUT / '06_rec_crops').glob('*.jpg'):
+        old.unlink()
     for i, r in enumerate(text_results):
         crop = r.get('crop')
         if crop is None:
@@ -239,13 +241,25 @@ def main():
 
     # 切分记录
     sr = fd_debug['split_records']
-    print(f"\n  切分修复      : {len(sr)} 个框被切分")
+    n_split_rec = sum(1 for r in sr if r.get('action', 'split') == 'split')
+    n_discard = len(sr) - n_split_rec
+    print(f"\n  切分修复      : {n_split_rec} 个框被切分"
+          + (f", {n_discard} 个合并框因已被独立检测覆盖而丢弃" if n_discard else ''))
     for i, rec in enumerate(sr, 1):
-        print(f"    [{i}] 原框 {[int(v) for v in rec['original']]} "
-              f"高={rec['height']:.0f}px (限 {rec['limit']:.0f}px) "
-              f"-> {rec['n_split']} 个子框")
+        act = rec.get('action', 'split')
+        if act == 'discard_tall_box':
+            print(f"    [{i}] 丢弃合并框 {[int(v) for v in rec['original']]} "
+                  f"高={rec['height']:.0f}px —— 所有子框均已被独立检测覆盖")
+        else:
+            print(f"    [{i}] 原框 {[int(v) for v in rec['original']]} "
+                  f"高={rec['height']:.0f}px (限 {rec['limit']:.0f}px) "
+                  f"-> {rec['n_split']} 个子框")
         for s in rec['children']:
-            print(f"         {[int(v) for v in s]} 高={s[3]-s[1]:.0f}px")
+            print(f"         保留 {[int(v) for v in s]} 高={s[3]-s[1]:.0f}px")
+        for d in rec.get('dropped_children', []):
+            print(f"         丢弃 {[int(v) for v in d['child']]} "
+                  f"(已被 {[int(v) for v in d['covered_by']]} "
+                  f"score={d['covered_by_score']:.2f} 覆盖)")
 
     # 10) letterbox 输入
     lb, _, _ = det._letterbox(img, det.imgsz)
@@ -275,7 +289,9 @@ def main():
             orig = img[oy1:oy2, ox1:ox2]
             # 原框
             o_vis = orig.copy()
-            cv2.putText(o_vis, f'#{i} ORIGINAL h={rec["height"]:.0f}px',
+            tag = ('DISCARDED' if rec.get('action') == 'discard_tall_box'
+                   else 'ORIGINAL')
+            cv2.putText(o_vis, f'#{i} {tag} h={rec["height"]:.0f}px',
                         (6, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             tiles.append(o_vis)
             # 子框
@@ -288,6 +304,17 @@ def main():
                 cv2.putText(sv, f'#{i}.{j} SPLIT h={sy2-sy1}px',
                             (6, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                             (0, 150, 0), 2)
+                tiles.append(sv)
+            # 被丢弃的子框 (已由独立检测覆盖)
+            for j, d in enumerate(rec.get('dropped_children', []), 1):
+                sx1, sy1, sx2, sy2 = [int(v) for v in d['child']]
+                sub = img[max(0, sy1):sy2, max(0, sx1):sx2]
+                if sub.size == 0:
+                    continue
+                sv = sub.copy()
+                cv2.putText(sv, f'#{i}.d{j} DROPPED (dup)',
+                            (6, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                            (0, 140, 255), 2)
                 tiles.append(sv)
             tiles.append(np.full((10, orig.shape[1], 3), 200, np.uint8))
 
@@ -317,7 +344,13 @@ def main():
             {'original': [float(v) for v in r['original']],
              'height': r['height'], 'limit': r['limit'],
              'n_split': r['n_split'],
-             'children': [[float(v) for v in c] for c in r['children']]}
+             'action': r.get('action', 'split'),
+             'children': [[float(v) for v in c] for c in r['children']],
+             'dropped_children': [
+                 {'child': [float(v) for v in d['child']],
+                  'covered_by': [float(v) for v in d['covered_by']],
+                  'covered_by_score': d['covered_by_score']}
+                 for d in r.get('dropped_children', [])]}
             for r in sr
         ],
         'raw_boxes': fd_debug['raw_boxes'],
@@ -335,6 +368,9 @@ def main():
     rec = rec_mod.FormulaRecognizerONNX(use_gpu=False, verbose=False)
 
     crops_meta = []
+    # 清掉上一轮留下的裁剪图 (框数会变, 否则残留旧文件导致数量对不上)
+    for old in (OUT / '20_formula_crops').glob('*.jpg'):
+        old.unlink()
     for i, r in enumerate(formula_results, 1):
         x1, y1, x2, y2 = [int(v) for v in r['box']]
         crop = img[max(0, y1):min(H, y2), max(0, x1):min(W, x2)]
