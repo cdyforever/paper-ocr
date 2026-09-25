@@ -16,3 +16,23 @@ Thumbs.db
 # Logs / temp
 *.log
 datasets/tmp/
+
+# ---------------------------------------------------------------------------
+# Model weights (never commit; re-generate with onnx_pipeline/export/)
+# ---------------------------------------------------------------------------
+weights/
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Isolated env for UniMERNet export (transformers 4.36)
+venv_legacy_tf/
+
+# Agent session state
+.workbuddy-ai/
+
+# Local scratch
+*.tmp
+/tmp/
