@@ -1,2 +1,0 @@
-from .ElementDetector import TableElementDetector
-from .ElementDetector import PictureElementDetector

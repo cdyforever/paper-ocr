@@ -1,2 +1,0 @@
-from .det_dbnet_photo.text_det_module import PhotoTextLineDetectModel as PhotoTextLineDetector
-from .det_dbnet_pdf.text_det_module import PDFTextLineDetectModel as PDFTextLineDetector

@@ -49,8 +49,8 @@ import numpy as np
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# 两个模块都是「纯 ONNX」，直接按文件路径导入以免触发 legacy 包的
-# paddle 依赖（func/algorithm/__init__.py -> paper_ocr -> paddle）。
+# 按文件路径加载同目录的纯 ONNX 模块，使本文件直接以脚本运行
+# （python func/algorithm/onnx_page_pipeline.py）时也不依赖包导入路径。
 import importlib.util as _ilu
 import sys as _sys
 

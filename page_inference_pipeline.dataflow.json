@@ -1,0 +1,245 @@
+{
+    "schema_version":  1,
+    "diagram_type":  "dataflow",
+    "meta":  {
+                 "title":  "页面 OCR 推理流程（纯 ONNX）",
+                 "output":  "page_inference_pipeline.html",
+                 "viewBox":  [
+                                 1240,
+                                 620
+                             ],
+                 "quality_profile":  "showcase",
+                 "views":  [
+                               {
+                                   "id":  "main-path",
+                                   "label":  "主路径",
+                                   "focus":  [
+                                                 "img",
+                                                 "mfd",
+                                                 "fbox",
+                                                 "mask",
+                                                 "dbnet",
+                                                 "rec",
+                                                 "merge",
+                                                 "out"
+                                             ],
+                                   "note":  "页面级解耦主链：公式检测先行，涂白后文本检测不再被公式碎片干扰。"
+                               },
+                               {
+                                   "id":  "formula-path",
+                                   "label":  "公式识别路径",
+                                   "focus":  [
+                                                 "fbox",
+                                                 "enc",
+                                                 "dec",
+                                                 "merge"
+                                             ],
+                                   "note":  "公式框回原图裁剪（笔画完整），UniMERNet encoder + KV cache 解码出 LaTeX。"
+                               },
+                               {
+                                   "id":  "text-path",
+                                   "label":  "文本识别路径",
+                                   "focus":  [
+                                                 "mask",
+                                                 "dbnet",
+                                                 "rec",
+                                                 "merge"
+                                             ],
+                                   "note":  "涂白纯文本图 → DBNet 行框 → 方向分类 + SVTR 识别。"
+                               }
+                           ]
+             },
+    "stages":  [
+                   {
+                       "label":  "输入"
+                   },
+                   {
+                       "label":  "公式检测"
+                   },
+                   {
+                       "label":  "公式框 · 涂白"
+                   },
+                   {
+                       "label":  "模型识别"
+                   },
+                   {
+                       "label":  "合并输出"
+                   }
+               ],
+    "nodes":  [
+                  {
+                      "id":  "img",
+                      "type":  "external",
+                      "label":  "页面图像",
+                      "sublabel":  "BGR / 文件路径",
+                      "stage":  0,
+                      "row":  1
+                  },
+                  {
+                      "id":  "mfd",
+                      "type":  "backend",
+                      "label":  "MFD 公式检测",
+                      "sublabel":  "YOLOv8l · ONNX FP16 83.5MB",
+                      "stage":  1,
+                      "row":  1,
+                      "tag":  "高框切分+去重"
+                  },
+                  {
+                      "id":  "fbox",
+                      "type":  "database",
+                      "label":  "公式框",
+                      "sublabel":  "embedding / isolated",
+                      "stage":  2,
+                      "row":  0
+                  },
+                  {
+                      "id":  "mask",
+                      "type":  "backend",
+                      "label":  "公式涂白",
+                      "sublabel":  "框外扩 6px 填白",
+                      "stage":  2,
+                      "row":  2
+                  },
+                  {
+                      "id":  "enc",
+                      "type":  "backend",
+                      "label":  "UniMERNet 编码",
+                      "sublabel":  "donut-swin · 192×672",
+                      "stage":  3,
+                      "row":  0
+                  },
+                  {
+                      "id":  "dec",
+                      "type":  "backend",
+                      "label":  "KV cache 解码",
+                      "sublabel":  "prefill + step · 贪婪",
+                      "stage":  3,
+                      "row":  1,
+                      "tag":  "缺图自动回退"
+                  },
+                  {
+                      "id":  "dbnet",
+                      "type":  "backend",
+                      "label":  "DBNet 文本检测",
+                      "sublabel":  "PP-OCRv4 det · 960px",
+                      "stage":  3,
+                      "row":  2
+                  },
+                  {
+                      "id":  "rec",
+                      "type":  "backend",
+                      "label":  "PP-OCRv4 识别",
+                      "sublabel":  "方向分类 + SVTR rec",
+                      "stage":  3,
+                      "row":  3
+                  },
+                  {
+                      "id":  "merge",
+                      "type":  "backend",
+                      "label":  "阅读顺序合并",
+                      "sublabel":  "行聚类 + 排序",
+                      "stage":  4,
+                      "row":  2
+                  },
+                  {
+                      "id":  "out",
+                      "type":  "database",
+                      "label":  "items / Markdown",
+                      "sublabel":  "text + formula 结构",
+                      "stage":  4,
+                      "row":  3
+                  }
+              ],
+    "flows":  [
+                  {
+                      "from":  "img",
+                      "to":  "mfd",
+                      "label":  "原图",
+                      "variant":  "emphasis",
+                      "route":  "straight"
+                  },
+                  {
+                      "from":  "mfd",
+                      "to":  "fbox",
+                      "label":  "切分去重后的框",
+                      "variant":  "default"
+                  },
+                  {
+                      "from":  "fbox",
+                      "to":  "mask",
+                      "label":  "按框填白",
+                      "variant":  "default"
+                  },
+                  {
+                      "from":  "mask",
+                      "to":  "dbnet",
+                      "label":  "纯文本图",
+                      "variant":  "emphasis"
+                  },
+                  {
+                      "from":  "dbnet",
+                      "to":  "rec",
+                      "label":  "文本行框裁剪",
+                      "variant":  "emphasis"
+                  },
+                  {
+                      "from":  "fbox",
+                      "to":  "enc",
+                      "label":  "原图裁剪公式区域",
+                      "variant":  "emphasis"
+                  },
+                  {
+                      "from":  "enc",
+                      "to":  "dec",
+                      "label":  "编码特征 (1,126,512)",
+                      "variant":  "emphasis"
+                  },
+                  {
+                      "from":  "dec",
+                      "to":  "merge",
+                      "label":  "LaTeX (BPE 解码)",
+                      "variant":  "emphasis"
+                  },
+                  {
+                      "from":  "rec",
+                      "to":  "merge",
+                      "label":  "文本行 + 置信度",
+                      "variant":  "default"
+                  },
+                  {
+                      "from":  "merge",
+                      "to":  "out",
+                      "label":  "排序完成",
+                      "variant":  "emphasis"
+                  }
+              ],
+    "cards":  [
+                  {
+                      "dot":  "emerald",
+                      "title":  "解耦要点",
+                      "items":  [
+                                    "公式检测在页面级先跑，不依赖 DBNet",
+                                    "公式一律从原图裁剪，涂白图只供文本检测",
+                                    "单条公式识别失败不影响整页输出"
+                                ]
+                  },
+                  {
+                      "dot":  "amber",
+                      "title":  "模型构成（全部 ONNX）",
+                      "items":  [
+                                    "MFD：YOLOv8l FP16（83.5 MB）",
+                                    "文本：DBNet det + cls + SVTR rec（PP-OCRv4）",
+                                    "公式：UniMERNet-tiny enc 54.4 + dec/prefill/step ≈150 MB"
+                                ]
+                  },
+                  {
+                      "dot":  "cyan",
+                      "title":  "解码事实（实测）",
+                      "items":  [
+                                    "KV 路径与无 cache 旧路径 30/30 逐 token 一致",
+                                    "CPU ~100 ms/token：权重内存带宽主导，非计算",
+                                    "GPU（CUDA provider）下 KV 收益显现"
+                                ]
+                  }
+              ]
+}

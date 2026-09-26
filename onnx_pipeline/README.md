@@ -325,9 +325,9 @@ python onnx_pipeline/export/3_formula_recognize_export_kv_onnx.py    # 导出 KV
 python onnx_pipeline/export/3_formula_recognize_quantize_fp16.py     # FP16 (--only kv 只转 KV 图)
 ```
 
-> **重要**: UniMERNet 官方代码为 `transformers 4.36` 编写，
-> 需用隔离环境 `venv_legacy_tf/`（已随项目保留）。
-> 导出脚本已自动把该目录加入 `sys.path`。
+> **重要**: UniMERNet 官方代码为 `transformers 4.36` 编写，导出/参考脚本通过
+> `sys.path` 使用平铺 shim 目录 `venv_legacy_tf/`（不入库，重建：
+> `python -m pip install "transformers==4.36.0" --target venv_legacy_tf`）。
 >
 > KV 图导出用 legacy TorchScript tracer（`dynamo=False`，torch 2.14 的 dynamo
 > 导出器处理不了 `*past` 变长参数）；FP16 KV 图加载时须用

@@ -1,7 +1,0 @@
-from .photo_ocr_handler import PhotoOCRHandler
-from .pdf_ocr_handler import PDFOCRHandler
-from .photo_ocr_test_handler import PhotoOCRTestHandler
-from .photo_ocr_offline_handler import PhotoOCROffLineHandler
-from .query_offline_handler import QueryOffLineHandler
-from .photo_subject_handler import PhotoSubjectHandler
-from .pdf_subject_handler import PDFSubjectHandler
