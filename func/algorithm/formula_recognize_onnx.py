@@ -52,6 +52,7 @@ class FormulaRecognizerONNX:
                  tokenizer_dir: str = str(DEFAULT_TOKENIZER_DIR),
                  use_gpu: bool = False,
                  max_new_tokens: int = 512,
+                 use_kv: bool = True,
                  verbose: bool = True):
         self.onnx_dir = Path(onnx_dir)
         self.tokenizer_dir = Path(tokenizer_dir)
@@ -87,23 +88,46 @@ class FormulaRecognizerONNX:
         dec_path = self.onnx_dir / 'unimernet_decoder.onnx'
         if not enc_path.exists():
             raise FileNotFoundError(f'encoder 模型不存在: {enc_path}')
-        if not dec_path.exists():
-            raise FileNotFoundError(f'decoder 模型不存在: {dec_path}')
 
         self.enc_sess = ort.InferenceSession(str(enc_path), providers=providers)
-        self.dec_sess = ort.InferenceSession(str(dec_path), providers=providers)
+
+        # KV Cache 图 (prefill + step, 消除 O(T^2) 历史重算, GPU 收益显著;
+        # CPU 上因权重带宽瓶颈墙钟持平, 但输出与旧路径逐 token 一致)。
+        # 缺失时回退到无 cache 解码器。
+        # 注意: FP16 KV 图会触发 ORT SimplifiedLayerNormFusion 的初始化 bug
+        # (InsertedPrecisionFreeCast 名字解析失败), 用 EXTENDED 级别规避。
+        kv_pre = self.onnx_dir / 'unimernet_decoder_prefill.onnx'
+        kv_step = self.onnx_dir / 'unimernet_decoder_step.onnx'
+        self.kv_mode = use_kv and kv_pre.exists() and kv_step.exists()
+        if self.kv_mode:
+            so = ort.SessionOptions()
+            so.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED)
+            self.prefill_sess = ort.InferenceSession(str(kv_pre), sess_options=so,
+                                                     providers=providers)
+            self.step_sess = ort.InferenceSession(str(kv_step), sess_options=so,
+                                                  providers=providers)
+            self._pre_in = {i.name: i.type for i in self.prefill_sess.get_inputs()}
+            self._step_in = {i.name: i.type for i in self.step_sess.get_inputs()}
+            self._step_past = [n for n in self._step_in if n.startswith('past_')]
+            self._n_layers = len(self._step_past) // 4
+        else:
+            if not dec_path.exists():
+                raise FileNotFoundError(f'decoder 模型不存在: {dec_path}')
+            self.dec_sess = ort.InferenceSession(str(dec_path), providers=providers)
+            self.dec_inputs = [i.name for i in self.dec_sess.get_inputs()]
+            self.dec_output = self.dec_sess.get_outputs()[0].name
 
         self.enc_input = self.enc_sess.get_inputs()[0].name
         self.enc_output = self.enc_sess.get_outputs()[0].name
-        self.dec_inputs = [i.name for i in self.dec_sess.get_inputs()]
-        self.dec_output = self.dec_sess.get_outputs()[0].name
 
         # tokenizer (用 tokenizers 库直接加载，避免依赖 transformers)
         self._load_tokenizer()
 
         if self.verbose:
             print(f'[FormulaRecognizerONNX] 加载完成 {time.time()-t0:.2f}s  '
-                  f'vocab={self.vocab_size}  providers={providers}')
+                  f'vocab={self.vocab_size}  解码={"KV cache" if self.kv_mode else "无cache"}  '
+                  f'providers={providers}')
 
     # -- tokenizer ----------------------------------------------------------
     def _load_tokenizer(self):
@@ -170,12 +194,60 @@ class FormulaRecognizerONNX:
 
     def decode_step(self, input_ids: np.ndarray,
                     enc_hidden: np.ndarray) -> np.ndarray:
-        """单步解码 -> logits [1, seq_len, vocab]"""
+        """单步解码 (无 cache 旧路径) -> logits [1, seq_len, vocab]"""
         logits = self.dec_sess.run(
             [self.dec_output],
             {self.dec_inputs[0]: input_ids,
              self.dec_inputs[1]: enc_hidden})[0]
         return logits
+
+    def _generate_nocache(self, enc: np.ndarray) -> List[int]:
+        """旧路径: 每步把全部 ids 重新送入 decoder (O(T^2))。"""
+        ids = [self.bos_id]
+        for _ in range(self.max_new_tokens):
+            logits = self.decode_step(np.array([ids], np.int64), enc)
+            nxt = int(np.argmax(logits[0, -1, :]))
+            if nxt == self.eos_id:
+                break
+            ids.append(nxt)
+        return ids
+
+    def _generate_kv(self, enc: np.ndarray) -> List[int]:
+        """快速路径: prefill + 单 token step, 携带 KV cache (O(T))。
+
+        step 图输入 = input_ids/position_ids (+可能的 encoder_hidden_states)
+        + past_self_key/value.N + past_cross_key/value.N (逐层交错)。
+        每步输出 = logits + 逐层新的 self K/V (cross cache 由 step 原样透传,
+        在 prefill 输出里, 需自行带回下一步)。
+        """
+        _DT = {'tensor(float)': np.float32, 'tensor(float16)': np.float16}
+        feeds = {'input_ids': np.array([[self.bos_id]], np.int64),
+                 'position_ids': np.array([[0]], np.int64)}
+        if 'encoder_hidden_states' in self._pre_in:
+            feeds['encoder_hidden_states'] = enc.astype(
+                _DT[self._pre_in['encoder_hidden_states']])
+        out = self.prefill_sess.run(None, feeds)
+        logits = out[0][0, -1]
+        caches = list(out[1:])          # 展平: 每层 (self_k,self_v,cross_k,cross_v)
+        ids = [self.bos_id]
+        for pos in range(1, self.max_new_tokens + 1):
+            tok = int(np.argmax(logits))
+            if tok == self.eos_id:
+                break
+            ids.append(tok)
+            f = {'input_ids': np.array([[tok]], np.int64),
+                 'position_ids': np.array([[pos]], np.int64)}
+            if 'encoder_hidden_states' in self._step_in:
+                f['encoder_hidden_states'] = enc.astype(
+                    _DT[self._step_in['encoder_hidden_states']])
+            f.update({n: t for n, t in zip(self._step_past, caches)})
+            out = self.step_sess.run(None, f)
+            logits = out[0][0, -1]
+            new_self = out[1:]          # 每层 (self_k, self_v)
+            for i in range(self._n_layers):
+                caches[4 * i] = new_self[2 * i]
+                caches[4 * i + 1] = new_self[2 * i + 1]
+        return ids
 
     def __call__(self, img: np.ndarray,
                  return_ids: bool = False) -> str:
@@ -196,16 +268,10 @@ class FormulaRecognizerONNX:
 
         t0 = time.time()
         enc_hidden = self.encode(img)
-
-        # 自回归贪婪解码
-        ids = [self.bos_id]
-        for _ in range(self.max_new_tokens):
-            input_ids = np.array([ids], dtype=np.int64)
-            logits = self.decode_step(input_ids, enc_hidden)
-            next_id = int(np.argmax(logits[0, -1, :]))
-            if next_id == self.eos_id:
-                break
-            ids.append(next_id)
+        if self.kv_mode:
+            ids = self._generate_kv(enc_hidden)
+        else:
+            ids = self._generate_nocache(enc_hidden)
 
         self.last_time = time.time() - t0
         latex = self._decode_fn(ids)

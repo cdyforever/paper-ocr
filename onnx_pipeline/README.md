@@ -19,7 +19,8 @@ onnx_pipeline/
 │   ├── 3_formula_recognize_download_weights.py  # 下载 UniMERNet 权重
 │   ├── 3_formula_recognize_make_minimal.py      # 提取最小代码副本
 │   ├── 3_formula_recognize_export_onnx.py       # 导出 encoder/decoder ONNX
-│   └── 3_formula_recognize_quantize_fp16.py     # UniMERNet FP16
+│   ├── 3_formula_recognize_export_kv_onnx.py    # 导出 KV cache prefill/step 图
+│   └── 3_formula_recognize_quantize_fp16.py     # UniMERNet FP16 (含 KV 图)
 └── verify/                                  # 验证脚本
     ├── verify_text_ocr.py                       # 文本检测 + 识别
     ├── verify_formula_detect.py                 # 公式检测 (对比 ultralytics)
@@ -31,6 +32,7 @@ onnx_pipeline/
     ├── verify_box_splitting.py                  # 检测框切分实验
     ├── verify_clean_vs_photo.py                 # 干净渲染 vs 真实照片对比
     ├── verify_page_decoupling.py                # ★ 页面级解耦: 公式/文本流程对比
+    ├── verify_formula_kv_cache.py               # ★ KV cache 与旧解码逐 token 对分 + 测速
     └── dump_intermediates.py                    # ★ 中间结果可视化
 ```
 
@@ -243,11 +245,15 @@ det = FormulaDetectorONNX(split_child_iou=0.6)
 |------|------|
 | MFD 公式检测 | 5.2 s |
 | DBNet + PP-OCRv4 (涂白图) | 6.4 s |
-| UniMERNet 公式识别 (30 个) | **96.4 s** |
-| 合计 | 109.1 s |
+| UniMERNet 公式识别 (30 个, 共 ~950 token) | **100–160 s** |
+| 合计 | ~115–170 s |
 
-瓶颈是公式识别的自回归解码（每步重算全部历史 KV）。
-如需提速见下方「可选优化」。
+MFR 仍是瓶颈，但根因已查明：**CPU 上解码耗时由 decoder 权重的内存带宽主导**
+（每 token 约 100–170 ms，随机器负载浮动——无论走哪条解码路径，
+每个 token 都要把 ~150 MB 的 FP16 权重完整读一遍）。
+已集成 **KV cache** 解码（prefill + 单 token step 图），与旧路径逐 token 100% 一致，
+消除了 O(T²) 的历史重算；CPU 墙钟持平，切到 GPU 后 KV 收益才会显现。
+进一步提速方案是跨公式 **batch decode**（需把导出图的 batch 轴设为动态）。
 
 ---
 
@@ -264,6 +270,7 @@ python onnx_pipeline/verify/verify_no_framework_deps.py   # 无 PaddlePaddle/tor
 python onnx_pipeline/verify/verify_real_accuracy.py       # 文本 93.6% / 公式 89.8%
 python onnx_pipeline/verify/verify_e2e_split.py           # 切分修复前后对比
 python onnx_pipeline/verify/verify_page_decoupling.py     # ★ 页面级解耦 A/B/C 对比
+python onnx_pipeline/verify/verify_formula_kv_cache.py    # ★ KV cache 逐 token 对分 (30/30 一致)
 python onnx_pipeline/verify/verify_semantic_eval.py       # 语义级 + 渲染对比
 python onnx_pipeline/verify/verify_box_splitting.py       # 检测框切分实验
 python onnx_pipeline/verify/verify_clean_vs_photo.py      # 干净 vs 照片对比
@@ -314,12 +321,18 @@ python onnx_pipeline/export/3_formula_recognize_download.py          # 配置 + 
 python onnx_pipeline/export/3_formula_recognize_download_weights.py  # 权重 (430MB)
 python onnx_pipeline/export/3_formula_recognize_make_minimal.py      # 提取最小代码
 python onnx_pipeline/export/3_formula_recognize_export_onnx.py       # 导出 ONNX
-python onnx_pipeline/export/3_formula_recognize_quantize_fp16.py     # FP16
+python onnx_pipeline/export/3_formula_recognize_export_kv_onnx.py    # 导出 KV cache 图 (FP32, 自带一致性校验)
+python onnx_pipeline/export/3_formula_recognize_quantize_fp16.py     # FP16 (--only kv 只转 KV 图)
 ```
 
 > **重要**: UniMERNet 官方代码为 `transformers 4.36` 编写，
 > 需用隔离环境 `venv_legacy_tf/`（已随项目保留）。
 > 导出脚本已自动把该目录加入 `sys.path`。
+>
+> KV 图导出用 legacy TorchScript tracer（`dynamo=False`，torch 2.14 的 dynamo
+> 导出器处理不了 `*past` 变长参数）；FP16 KV 图加载时须用
+> `ORT_ENABLE_EXTENDED` 优化级别（ORT 1.24 的 `SimplifiedLayerNormFusion`
+> 在 `ENABLE_ALL` 下对这两张图有初始化 bug）。
 
 ---
 
@@ -333,7 +346,9 @@ python onnx_pipeline/export/3_formula_recognize_quantize_fp16.py     # FP16
 | 字符字典 | `weights/text_recognition/ppocr_keys_v1.txt` | 26 KB |
 | **公式检测 MFD** | `weights/formula_detect/mfd_yolov8_fp16.onnx` | **83.5 MB** |
 | **公式识别 encoder** | `weights/formula_recognize/onnx_fp16/unimernet_encoder.onnx` | **54.4 MB** |
-| **公式识别 decoder** | `weights/formula_recognize/onnx_fp16/unimernet_decoder.onnx` | **156.5 MB** |
+| **公式识别 decoder (无 cache)** | `weights/formula_recognize/onnx_fp16/unimernet_decoder.onnx` | **156.5 MB** |
+| **公式识别 prefill (KV cache)** | `weights/formula_recognize/onnx_fp16/unimernet_decoder_prefill.onnx` | **155.5 MB** |
+| **公式识别 step (KV cache)** | `weights/formula_recognize/onnx_fp16/unimernet_decoder_step.onnx` | **149.4 MB** |
 
 原始 PyTorch 权重（重新导出时用）：
 - `weights/formula_detect/yolo_v8_ft.pt` (334 MB)
@@ -364,7 +379,7 @@ for f in det(image):
 
 # 公式识别
 from func.algorithm.formula_recognize_onnx import FormulaRecognizerONNX
-rec = FormulaRecognizerONNX()
+rec = FormulaRecognizerONNX()          # 默认走 KV cache 快路径, 缺图自动回退
 latex = rec(formula_crop)
 ```
 

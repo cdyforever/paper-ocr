@@ -328,10 +328,15 @@ print(pipe.to_markdown(items))                   # 拼成 Markdown ($...$ / $$..
 |------|------|
 | MFD 公式检测 | 5.2 s |
 | DBNet + PP-OCRv4（涂白图） | 6.4 s |
-| UniMERNet 公式识别（30 个） | **96.4 s** |
-| 合计 | 109.1 s |
+| UniMERNet 公式识别（30 个, 共 ~950 token） | **100–160 s** |
+| 合计 | ~115–170 s |
 
-瓶颈是公式识别的自回归解码（每步重算全部历史 KV），优化见第八节。
+MFR 瓶颈的根因已定位：**CPU 上每个 token 约 100–170 ms（随负载浮动），由 decoder
+权重（~150 MB FP16）的内存带宽主导**——任何解码路径每个 token 都要把权重完整读一遍，
+所以 KV cache（消除 O(T²) 历史重算）在 CPU 墙钟上几乎不提速。
+已集成 KV cache（与旧路径逐 token 100% 一致，见 `verify_formula_kv_cache.py`），
+为 GPU / batch decode 铺路；实测 INT8 动态量化可提速 ~1.35×，
+但会改变 2/30 个公式的 token 输出，故默认不启用。
 
 ### 5.8 可视化
 
@@ -397,10 +402,13 @@ Pred: y={\frac{\mathbf{e}^{x}}{{x}^{2}}}+\mathbf{l}\,\mathbf{n}\ 3
 - ✅ **中间结果可视化**（DBNet 概率图、各级检测框、切分对比）
 - ✅ **页面级解耦**（公式识别 51.2% → 93.7%，公式覆盖度 10/30 → 30/30）
 - ✅ **切分子框去重**（合并框切出的子框若已被独立检测覆盖则丢弃，重复框 1 → 0）
+- ✅ **KV Cache 解码**（prefill/step 图 + FP16，30 crop 逐 token 与旧路径 100% 一致；
+  CPU 受权重带宽限制墙钟持平，GPU 切换后收益显现）
 
 ### 可选优化
 
-- **KV Cache**：公式识别当前每步重算历史，加 cache 可提速 3-5 倍（当前 30 个公式耗时 96 s）
+- **跨公式 batch decode**：CPU 上唯一能摊薄权重读取开销的提速方式（需导出 batch 动态轴的图）
+- **GPU (CUDAExecutionProvider)**：KV 路径已就绪，算力和带宽同时受益
 - **beam search**：当前贪婪解码，beam=3 可提升复杂公式准确率
 - **换 base 版**：UniMERNet-base（1.2GB）对复杂公式更强
 - **字距预处理**：对 `sec` 这类大间距 token 做形态学闭运算，可修复 2(3)
@@ -414,6 +422,7 @@ Pred: y={\frac{\mathbf{e}^{x}}{{x}^{2}}}+\mathbf{l}\,\mathbf{n}\ 3
 | `onnx_pipeline/verify/dump_intermediates.py` | **中间结果可视化** |
 | `onnx_pipeline/verify/verify_e2e_split.py` | **端到端切分修复对比** |
 | `onnx_pipeline/verify/verify_page_decoupling.py` | **★ 页面级解耦 A/B/C 对比** |
+| `onnx_pipeline/verify/verify_formula_kv_cache.py` | **★ KV cache 与旧解码逐 token 对分 + 测速** |
 | `onnx_pipeline/verify/analyze_dbnet_on_formula.py` | DBNet 框 vs MFD 框覆盖度 |
 | `onnx_pipeline/verify/analyze_dbnet_rootcause.py` | DBNet 失效归因 |
 | `onnx_pipeline/verify/analyze_dbnet_fix.py` | 四种解决方案量化对比 |
