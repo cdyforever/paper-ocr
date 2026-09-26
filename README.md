@@ -1,4 +1,4 @@
-# Canpoint OCR
+# Paper OCR
 
 ## 纯 ONNX 方案
 

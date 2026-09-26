@@ -41,7 +41,7 @@ except ImportError:  # pragma: no cover
 # ----------------------------------------------------------------------------
 # Default paths (resolved relative to the project root)
 # ----------------------------------------------------------------------------
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]  # .../canpoint-ocr
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]  # .../paper-ocr
 DEFAULT_DET_MODEL = _PROJECT_ROOT / 'weights' / 'text_line_detect' / 'dbnet_det.onnx'
 DEFAULT_REC_MODEL = _PROJECT_ROOT / 'weights' / 'text_recognition' / 'crnn_rec.onnx'
 DEFAULT_DICT = _PROJECT_ROOT / 'weights' / 'text_recognition' / 'ppocr_keys_v1.txt'

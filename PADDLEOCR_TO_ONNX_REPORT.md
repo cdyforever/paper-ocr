@@ -341,7 +341,7 @@ font = ImageFont.truetype(r'C:\Windows\Fonts\msyh.ttc', 20)
 
 ### 最终成果
 
-**PaddleOCR 的检测和识别模型已成功转换为纯 ONNX 格式**，保存在 `D:\Work\canpoint-ocr\weights\` 下。推理阶段**完全不需要 PaddlePaddle 框架**，识别结果与 PaddleOCR **逐字 100% 一致**。
+**PaddleOCR 的检测和识别模型已成功转换为纯 ONNX 格式**，保存在 `D:\Work\paper-ocr\weights\` 下。推理阶段**完全不需要 PaddlePaddle 框架**，识别结果与 PaddleOCR **逐字 100% 一致**。
 
 ---
 
@@ -349,7 +349,7 @@ font = ImageFont.truetype(r'C:\Windows\Fonts\msyh.ttc', 20)
 
 ## 🎉 转换成功!
 
-**模型位置**: `D:\Work\canpoint-ocr\weights\text_line_detect\` 和 `weights\text_recognition\`
+**模型位置**: `D:\Work\paper-ocr\weights\text_line_detect\` 和 `weights\text_recognition\`
 
 **核心引擎**: `func/algorithm/onnx_ocr_engine.py`
 
