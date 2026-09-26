@@ -16,7 +16,11 @@
 会结构性失效（公式区域平均只有 43.9% 面积落在行框内），解耦后公式识别
 **51.2% → 93.7%**。
 
-推理流程图（可交互 HTML，含深浅主题与导览视图）：[page_inference_pipeline.html](page_inference_pipeline.html)
+## 推理流程图
+
+![页面 OCR 推理流程（纯 ONNX）](assets/page_inference_pipeline.svg)
+
+> 可交互版本（深浅主题、导览视图、PNG/SVG 导出按钮）：[page_inference_pipeline.html](page_inference_pipeline.html)
 
 - 单模块推理: `func/algorithm/onnx_ocr_engine.py`、`formula_detect_onnx.py`、`formula_recognize_onnx.py`
 - 导出/验证脚本: `onnx_pipeline/`（见 [onnx_pipeline/README.md](onnx_pipeline/README.md)）
